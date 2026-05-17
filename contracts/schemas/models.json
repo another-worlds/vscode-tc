@@ -1,0 +1,261 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Traffic Count MVP Data Schemas",
+  "description": "All Pydantic model schemas for the MVP",
+  "definitions": {
+    "Workspace": {
+      "type": "object",
+      "title": "Workspace",
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid",
+          "description": "Unique workspace identifier"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255,
+          "description": "Workspace name"
+        },
+        "owner_id": {
+          "type": "string",
+          "format": "uuid",
+          "description": "UUID of workspace owner (User)"
+        },
+        "storage_quota_gb": {
+          "type": "number",
+          "minimum": 0,
+          "description": "Storage quota in GB"
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Creation timestamp (UTC)"
+        },
+        "updated_at": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Last update timestamp (UTC)"
+        }
+      },
+      "required": ["id", "name", "owner_id", "storage_quota_gb", "created_at", "updated_at"]
+    },
+    "Project": {
+      "type": "object",
+      "title": "Project",
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid",
+          "description": "Unique project identifier"
+        },
+        "workspace_id": {
+          "type": "string",
+          "format": "uuid",
+          "description": "Workspace UUID (FK)"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 255
+        },
+        "video_path": {
+          "type": "string",
+          "description": "Full path to video file"
+        },
+        "file_hash": {
+          "type": "string",
+          "description": "SHA256 hash for deduplication"
+        },
+        "resolution": {
+          "type": "string",
+          "pattern": "^\\d+x\\d+$",
+          "description": "Video resolution (e.g., 1920x1080)"
+        },
+        "duration_sec": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "status": {
+          "type": "string",
+          "enum": ["uploaded", "processing", "done", "failed"],
+          "description": "Processing status"
+        },
+        "line_config": {
+          "type": "object",
+          "description": "Line configuration from React component"
+        },
+        "od_matrix": {
+          "type": "object",
+          "description": "Origin-destination matrix result"
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "updated_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["id", "workspace_id", "name", "video_path", "status", "created_at", "updated_at"]
+    },
+    "User": {
+      "type": "object",
+      "title": "User",
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "username": {
+          "type": "string",
+          "minLength": 3,
+          "maxLength": 50
+        },
+        "email": {
+          "type": "string",
+          "format": "email"
+        },
+        "hashed_password": {
+          "type": "string",
+          "description": "bcrypt hashed password"
+        },
+        "roles": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "enum": ["pm", "analyst", "admin"]
+          },
+          "description": "User roles for RBAC"
+        },
+        "debug_override": {
+          "type": "boolean",
+          "description": "DEBUG mode flag"
+        },
+        "is_active": {
+          "type": "boolean"
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["id", "username", "email", "hashed_password", "roles", "is_active", "created_at"]
+    },
+    "AuditLog": {
+      "type": "object",
+      "title": "AuditLog",
+      "properties": {
+        "id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "user_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "action": {
+          "type": "string",
+          "enum": ["CREATE", "UPDATE", "DELETE", "EXPORT", "LOGIN", "EXPORT_OD_MATRIX"]
+        },
+        "target_id": {
+          "type": "string",
+          "format": "uuid",
+          "description": "Project or Workspace UUID"
+        },
+        "target_type": {
+          "type": "string",
+          "enum": ["Project", "Workspace", "User"]
+        },
+        "details": {
+          "type": "object",
+          "description": "Additional context (old_value, new_value, etc.)"
+        },
+        "timestamp": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "ip_address": {
+          "type": "string",
+          "format": "ipv4",
+          "description": "Request origin IP"
+        }
+      },
+      "required": ["id", "user_id", "action", "target_type", "timestamp"]
+    },
+    "Job": {
+      "type": "object",
+      "title": "Job",
+      "properties": {
+        "job_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "video_id": {
+          "type": "string",
+          "format": "uuid"
+        },
+        "video_path": {
+          "type": "string"
+        },
+        "config": {
+          "type": "object",
+          "description": "YOLOv8 config dict"
+        },
+        "lines": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "id": { "type": "string" },
+              "points": {
+                "type": "array",
+                "items": { "type": "array", "items": { "type": "number" } }
+              },
+              "name": { "type": "string" }
+            }
+          }
+        },
+        "output_parquet": {
+          "type": "string"
+        },
+        "status": {
+          "type": "string",
+          "enum": ["pending", "processing", "done", "failed"]
+        },
+        "created_at": {
+          "type": "string",
+          "format": "date-time"
+        }
+      },
+      "required": ["job_id", "video_id", "status", "created_at"]
+    },
+    "Track": {
+      "type": "object",
+      "title": "Track (Parquet Record)",
+      "description": "Single row in Parquet tracking file",
+      "properties": {
+        "frame": { "type": "integer" },
+        "track_id": { "type": "integer" },
+        "bbox_x": { "type": "number" },
+        "bbox_y": { "type": "number" },
+        "bbox_w": { "type": "number" },
+        "bbox_h": { "type": "number" },
+        "cx": { "type": "number", "description": "Center X" },
+        "cy": { "type": "number", "description": "Center Y" },
+        "class_id": { "type": "integer" },
+        "class_name": { "type": "string" },
+        "confidence": { "type": "number" },
+        "prev_cx": { "type": "number" },
+        "prev_cy": { "type": "number" },
+        "dx": { "type": "number", "description": "Direction X" },
+        "dy": { "type": "number", "description": "Direction Y" },
+        "line_id": { "type": "string" },
+        "crossing_event": { "type": "integer", "enum": [0, 1, 2] }
+      },
+      "required": ["frame", "track_id", "cx", "cy", "class_id", "class_name"]
+    }
+  }
+}

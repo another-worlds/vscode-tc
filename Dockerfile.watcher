@@ -1,0 +1,24 @@
+# Yandex Disk Watcher service - watches for new video files
+FROM python:3.11-slim
+
+WORKDIR /app
+
+# Install system dependencies
+RUN apt-get update && apt-get install -y \
+    postgresql-client \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy requirements
+COPY watcher/requirements.txt .
+RUN pip install --no-cache-dir -r requirements.txt
+
+# Copy watcher code
+COPY watcher/ .
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:9000/health || exit 1
+
+EXPOSE 9000
+
+CMD ["python", "main.py"]
