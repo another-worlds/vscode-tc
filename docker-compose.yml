@@ -1,0 +1,145 @@
+# Grand Contract v1.0 — Infrastructure Layer
+# Launch: sudo docker compose up
+# Scale workers: docker compose scale worker=N
+
+x-logging: &default-logging
+  driver: "json-file"
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+services:
+  nginx:
+    image: nginx:1.25-alpine
+    ports:
+      - "80:80"
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      - backend
+      - frontend
+    restart: unless-stopped
+    logging: *default-logging
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      cache_from:
+        - type=local,src=/tmp/.buildx-cache-frontend
+    expose:
+      - "3000"
+    restart: unless-stopped
+    logging: *default-logging
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+      cache_from:
+        - type=local,src=/tmp/.buildx-cache-backend
+    expose:
+      - "8000"
+    env_file: .env
+    volumes:
+      - video_data:/data/videos
+      - frame_data:/data/frames
+      - parquet_data:/data/parquet
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    logging: *default-logging
+
+  worker:
+    build:
+      context: ./worker
+      dockerfile: Dockerfile
+      cache_from:
+        - type=local,src=/tmp/.buildx-cache-worker
+    env_file: .env
+    volumes:
+      - video_data:/data/videos
+      - frame_data:/data/frames
+      - parquet_data:/data/parquet
+      - model_cache:/root/.cache/ultralytics
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+      replicas: 1
+    restart: unless-stopped
+    logging: *default-logging
+
+  watcher:
+    build:
+      context: ./watcher
+      dockerfile: Dockerfile
+      cache_from:
+        - type=local,src=/tmp/.buildx-cache-watcher
+    env_file: .env
+    volumes:
+      - video_data:/data/videos
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    logging: *default-logging
+
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-trafficcounting}
+      POSTGRES_USER: ${POSTGRES_USER:-tc_user}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+    volumes:
+      - pg_data:/var/lib/postgresql/data
+      - ./db/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    expose:
+      - "5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-tc_user}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    restart: unless-stopped
+    logging: *default-logging
+
+  redis:
+    image: redis:7-alpine
+    command: >
+      redis-server
+      --appendonly yes
+      --maxmemory 512mb
+      --maxmemory-policy allkeys-lru
+    volumes:
+      - redis_data:/data
+    expose:
+      - "6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+    logging: *default-logging
+
+volumes:
+  pg_data:
+  video_data:
+  frame_data:
+  parquet_data:
+  model_cache:
+  redis_data:

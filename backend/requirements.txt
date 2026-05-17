@@ -1,0 +1,19 @@
+# Grand Contract v1.0 — Backend Python dependencies
+# FastAPI 0.115+ with async SQLAlchemy, Redis, OAuth2, Excel export
+
+fastapi==0.115.5
+uvicorn[standard]==0.32.1
+sqlalchemy[asyncio]==2.0.36
+asyncpg==0.30.0
+alembic==1.14.0
+pydantic==2.10.3
+pydantic-settings==2.6.1
+python-jose[cryptography]==3.3.0
+httpx==0.28.1          # OAuth2 HTTP client
+redis[hiredis]==5.2.1
+openpyxl==3.1.5        # Excel export
+python-multipart==0.0.12  # file upload
+aiofiles==24.1.0
+pyarrow==18.1.0        # read parquet trajectories
+pandas==2.2.3
+ffmpeg-python==0.2.0   # video metadata probe
