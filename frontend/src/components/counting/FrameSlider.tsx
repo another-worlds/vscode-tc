@@ -7,15 +7,7 @@ interface Props {
   onChange: (frame: number) => void;
 }
 
-/**
- * Horizontal slider to navigate through uniformly sampled video frames.
- *
- * Displays: frame number / total frames, time position if fps known.
- * Range: [0, frameCount - 1].
- * Invariant: currentFrame ∈ [0, frameCount - 1].
- */
 export const FrameSlider: React.FC<Props> = ({ frameCount, currentFrame, onChange }) => {
-  // TODO: implement per contract
   return (
     <div className="flex items-center gap-3 p-2 bg-gray-800">
       <span className="text-white text-sm w-24">Frame {currentFrame + 1}/{frameCount}</span>

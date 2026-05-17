@@ -5,7 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import settings
 from app.database import engine, Base
-from app.routers import auth, workspaces, projects, videos, counting_lines, dashboard, export, audit
+from app.routers import auth, workspaces, projects, videos, counting_lines, dashboard, export, audit, internal_videos
 
 
 @asynccontextmanager
@@ -62,6 +62,7 @@ def create_app() -> FastAPI:
     app.include_router(dashboard.router, prefix="/v1")
     app.include_router(export.router, prefix="/v1")
     app.include_router(audit.router, prefix="/v1")
+    app.include_router(internal_videos.router)
     
     # Health check endpoint
     @app.get("/health")

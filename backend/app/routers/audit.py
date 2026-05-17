@@ -21,5 +21,11 @@ async def get_audit_log(
     db: AsyncSession = Depends(get_db),
 ):
     """Query audit log. MANAGER+ only."""
-    # TODO: implement per contract
-    pass
+    return await audit_service.get_audit_log(
+        db=db,
+        resource_type=resource_type,
+        resource_id=resource_id,
+        user_id=user_id,
+        limit=limit,
+        offset=offset,
+    )

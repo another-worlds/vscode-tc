@@ -11,34 +11,34 @@ interface Props {
   canvasHeight: number;
 }
 
-/**
- * Renders ALL tracking trajectories as polylines on the video frame.
- * Trajectory of each track is drawn from start to currentFrame position.
- *
- * Visual encoding:
- *   - Line color: by class_id (car=blue, truck=red, motorcycle=green, bus=orange)
- *   - Current position: filled circle at head of trajectory
- *   - Direction indicator: arrow at last 2 points
- *   - Opacity: proportional to track recency (recent = opaque)
- *
- * Performance note:
- *   Tracks not visible at currentFrame are skipped.
- *   For >500 tracks: canvas pixel operations instead of Konva shapes.
- *
- * Invariant: all coordinate values are in pixel space (video resolution).
- */
 export const TrajectoryOverlay: React.FC<Props> = ({
-  data, currentFrame, canvasWidth, canvasHeight
+  data, currentFrame,
 }) => {
-  // TODO: implement per contract — filter tracks by currentFrame, render polylines
-  return <Layer />;
+  return (
+    <Layer>
+      {data.tracks.map((track) => {
+        const pts = getVisiblePoints(track, currentFrame);
+        if (!pts || pts.length < 2) return null;
+        const color = VEHICLE_COLORS[track.class_id] ?? "#FFFFFF";
+        const lastX = pts[pts.length - 2];
+        const lastY = pts[pts.length - 1];
+        return (
+          <React.Fragment key={track.track_id}>
+            <Line points={pts} stroke={color} strokeWidth={1.5} opacity={0.7} />
+            <Circle x={lastX} y={lastY} radius={4} fill={color} />
+          </React.Fragment>
+        );
+      })}
+    </Layer>
+  );
 };
 
-/**
- * Filter track frames up to (and including) currentFrame.
- * Returns null if track has no frames at or before currentFrame.
- */
 function getVisiblePoints(track: Track, currentFrame: number): number[] | null {
-  // TODO: implement per contract
-  return null;
+  const visible = track.frames.filter((f) => f.f <= currentFrame);
+  if (visible.length === 0) return null;
+  const pts: number[] = [];
+  for (const f of visible) {
+    pts.push(f.x, f.y);
+  }
+  return pts.length >= 4 ? pts : null;
 }

@@ -3,9 +3,16 @@
 from __future__ import annotations
 from uuid import UUID
 import pandas as pd
+import numpy as np
+from pathlib import Path
+from datetime import datetime, timezone
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
+from fastapi import HTTPException, status
 from app.models.counting_line import CountingLine, CountingResult
-from app.schemas.counting_line import CountingLineCreate, CountingLineOut, CountingResultOut
+from app.models.video import Video, VideoStatus
+from app.schemas.counting_line import CountingLineCreate
+from app.config import settings
 
 
 async def create_counting_line(
@@ -30,8 +37,26 @@ async def create_counting_line(
         - HTTPException 404 if video not found
         - HTTPException 422 if video not yet PROCESSED
     """
-    # TODO: implement per contract
-    pass
+    stmt = select(Video).where(Video.id == video_id)
+    result = await db.execute(stmt)
+    video = result.scalar_one_or_none()
+    if video is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Video not found")
+    if video.status != VideoStatus.PROCESSED:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Video not yet processed")
+
+    points_raw = [[p.x, p.y] for p in payload.points]
+    line = CountingLine(
+        video_id=video_id,
+        name=payload.name,
+        points=points_raw,
+        color=payload.color,
+        created_by=user_id,
+    )
+    db.add(line)
+    await db.commit()
+    await db.refresh(line)
+    return line
 
 
 async def compute_line_counts(
@@ -51,17 +76,77 @@ async def compute_line_counts(
         5. Aggregate counts per class_id → vehicle_pct dict
 
     Performance note: pandas vectorized; for >1M rows consider polars or chunked read.
-
-    Returns:
-        CountingResult with count_in, count_out, vehicle_pct.
-
-    Side-effects: UPSERT CountingResult, fires audit log VIDEO_MARKUP_COMPLETED.
-    Error modes:
-        - HTTPException 404 if line or parquet not found
-        - HTTPException 422 if video not PROCESSED
     """
-    # TODO: implement per contract
-    pass
+    stmt = select(CountingLine).where(CountingLine.id == line_id)
+    result = await db.execute(stmt)
+    line = result.scalar_one_or_none()
+    if line is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Counting line not found")
+
+    video_stmt = select(Video).where(Video.id == line.video_id)
+    video_result = await db.execute(video_stmt)
+    video = video_result.scalar_one_or_none()
+    if video is None or video.parquet_path is None:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="Video has no trajectory data")
+
+    df = pd.read_parquet(video.parquet_path)
+    # Compute centroids
+    df["cx"] = (df["x1"] + df["x2"]) / 2.0
+    df["cy"] = (df["y1"] + df["y2"]) / 2.0
+
+    points = line.points  # [[x, y], [x, y], ...]
+    # Use first two points as the primary line segment
+    line_start = (float(points[0][0]), float(points[0][1]))
+    line_end = (float(points[1][0]), float(points[1][1]))
+
+    count_in = 0
+    count_out = 0
+    class_counts: dict[int, int] = {}
+
+    for track_id, group in df.sort_values("frame_no").groupby("track_id"):
+        cx_vals = group["cx"].tolist()
+        cy_vals = group["cy"].tolist()
+        class_ids = group["class_id"].tolist()
+
+        for i in range(len(cx_vals) - 1):
+            p1 = (cx_vals[i], cy_vals[i])
+            p2 = (cx_vals[i + 1], cy_vals[i + 1])
+            if _segment_intersects_line(p1, p2, line_start, line_end):
+                direction = _compute_direction(p1, p2, line_start, line_end)
+                if direction == "in":
+                    count_in += 1
+                else:
+                    count_out += 1
+                class_id = int(class_ids[i])
+                class_counts[class_id] = class_counts.get(class_id, 0) + 1
+
+    total = count_in + count_out
+    vehicle_pct: dict[str, float] | None = None
+    if total > 0:
+        vehicle_pct = {str(k): round(v / total * 100, 2) for k, v in class_counts.items()}
+
+    # Upsert CountingResult
+    res_stmt = select(CountingResult).where(CountingResult.counting_line_id == line_id)
+    res_result = await db.execute(res_stmt)
+    counting_result = res_result.scalar_one_or_none()
+
+    if counting_result:
+        counting_result.count_in = count_in
+        counting_result.count_out = count_out
+        counting_result.vehicle_pct = vehicle_pct
+        counting_result.computed_at = datetime.now(timezone.utc)
+    else:
+        counting_result = CountingResult(
+            counting_line_id=line_id,
+            count_in=count_in,
+            count_out=count_out,
+            vehicle_pct=vehicle_pct,
+        )
+        db.add(counting_result)
+
+    await db.commit()
+    await db.refresh(counting_result)
+    return counting_result
 
 
 def _segment_intersects_line(
@@ -72,18 +157,22 @@ def _segment_intersects_line(
 ) -> bool:
     """
     2D segment-segment intersection test (cross-product method).
-
-    Args:
-        p1, p2:          trajectory segment endpoints
-        line_start/end:  counting line endpoints
-
-    Returns:
-        True if segments intersect (excluding collinear).
-
+    Returns True if segments intersect (excluding collinear).
     Contract: pure function, no side-effects, O(1).
     """
-    # TODO: implement per contract
-    pass
+    def cross(o, a, b):
+        return (a[0] - o[0]) * (b[1] - o[1]) - (a[1] - o[1]) * (b[0] - o[0])
+
+    d1 = cross(line_start, line_end, p1)
+    d2 = cross(line_start, line_end, p2)
+    d3 = cross(p1, p2, line_start)
+    d4 = cross(p1, p2, line_end)
+
+    if ((d1 > 0 and d2 < 0) or (d1 < 0 and d2 > 0)) and \
+       ((d3 > 0 and d4 < 0) or (d3 < 0 and d4 > 0)):
+        return True
+
+    return False
 
 
 def _compute_direction(
@@ -94,12 +183,14 @@ def _compute_direction(
 ) -> str:
     """
     Determine crossing direction using cross product.
-
-    Returns:
-        'in' | 'out'
+    Returns: 'in' | 'out'
     """
-    # TODO: implement per contract
-    pass
+    lx = line_end[0] - line_start[0]
+    ly = line_end[1] - line_start[1]
+    mx = centroid_after[0] - centroid_before[0]
+    my = centroid_after[1] - centroid_before[1]
+    cross = lx * my - ly * mx
+    return "in" if cross > 0 else "out"
 
 
 async def get_trajectory_heatmap_data(
@@ -109,29 +200,59 @@ async def get_trajectory_heatmap_data(
     Read parquet trajectories and compute a density grid for heatmap overlay.
 
     Returns:
-        {
-            "width": int, "height": int,
-            "grid": list[list[float]]   # normalized 0–1 density values
-        }
-
-    Performance note: uses numpy 2D histogram (resolution: 100x100 cells default).
+        {"width": int, "height": int, "grid": list[list[float]]}
     """
-    # TODO: implement per contract
-    pass
+    stmt = select(Video).where(Video.id == video_id)
+    result = await db.execute(stmt)
+    video = result.scalar_one_or_none()
+    if video is None or video.parquet_path is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Video trajectory not available")
+
+    df = pd.read_parquet(video.parquet_path)
+    cx = ((df["x1"] + df["x2"]) / 2.0).values
+    cy = ((df["y1"] + df["y2"]) / 2.0).values
+
+    grid_size = 100
+    hist, _, _ = np.histogram2d(cx, cy, bins=grid_size, density=False)
+    max_val = float(hist.max() or 1.0)
+    normalized = (hist / max_val).tolist()
+
+    return {
+        "width": video.resolution_w or grid_size,
+        "height": video.resolution_h or grid_size,
+        "grid": normalized,
+    }
 
 
 async def suggest_counting_lines(video_id: UUID, db: AsyncSession) -> list[dict]:
     """
-    Server-side data prep for client-side cluster suggestion.
-
-    Computes trajectory segment angles and positions, returns cluster data
-    for client-side DBSCAN (or similar) to suggest line placements.
-
-    Returns:
-        List of trajectory segment dicts:
-        [{"x_mid": float, "y_mid": float, "angle_deg": float}, ...]
-
-    Note: actual clustering is done client-side (M13) for responsiveness.
+    Return trajectory segment midpoints and angles for client-side clustering.
     """
-    # TODO: implement per contract
-    pass
+    stmt = select(Video).where(Video.id == video_id)
+    result = await db.execute(stmt)
+    video = result.scalar_one_or_none()
+    if video is None or video.parquet_path is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Video trajectory not available")
+
+    df = pd.read_parquet(video.parquet_path).sort_values(["track_id", "frame_no"])
+    df["cx"] = (df["x1"] + df["x2"]) / 2.0
+    df["cy"] = (df["y1"] + df["y2"]) / 2.0
+
+    segments = []
+    for _, group in df.groupby("track_id"):
+        cx_vals = group["cx"].values
+        cy_vals = group["cy"].values
+        for i in range(len(cx_vals) - 1):
+            dx = cx_vals[i + 1] - cx_vals[i]
+            dy = cy_vals[i + 1] - cy_vals[i]
+            length = float(np.hypot(dx, dy))
+            if length < 1.0:
+                continue
+            angle_deg = float(np.degrees(np.arctan2(dy, dx))) % 180.0
+            segments.append({
+                "x_mid": float((cx_vals[i] + cx_vals[i + 1]) / 2),
+                "y_mid": float((cy_vals[i] + cy_vals[i + 1]) / 2),
+                "angle_deg": angle_deg,
+            })
+
+    return segments

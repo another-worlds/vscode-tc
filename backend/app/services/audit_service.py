@@ -1,6 +1,7 @@
 # Grand Contract v1.0 — M11 Audit Service
 from __future__ import annotations
 from uuid import UUID
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from app.models.audit_log import AuditLog, AuditAction
 
@@ -20,8 +21,15 @@ async def log_action(
     Side-effects: DB INSERT only (never UPDATE/DELETE).
     Performance: fire-and-forget acceptable; caller should not await in hot path.
     """
-    # TODO: implement per contract
-    pass
+    audit = AuditLog(
+        action=action,
+        user_id=user_id,
+        resource_type=resource_type,
+        resource_id=resource_id,
+        metadata=metadata,
+    )
+    db.add(audit)
+    await db.commit()
 
 
 async def get_audit_log(
@@ -38,5 +46,14 @@ async def get_audit_log(
     Returns:
         List of AuditLog records ordered by created_at DESC.
     """
-    # TODO: implement per contract
-    pass
+    stmt = select(AuditLog)
+    if resource_type:
+        stmt = stmt.where(AuditLog.resource_type == resource_type)
+    if resource_id:
+        stmt = stmt.where(AuditLog.resource_id == resource_id)
+    if user_id:
+        stmt = stmt.where(AuditLog.user_id == user_id)
+
+    stmt = stmt.order_by(AuditLog.created_at.desc()).limit(limit).offset(offset)
+    result = await db.execute(stmt)
+    return result.scalars().all()

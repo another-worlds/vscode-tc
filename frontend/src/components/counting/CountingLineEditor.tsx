@@ -86,80 +86,111 @@ export const CountingLineEditor: React.FC<Props> = ({ video, projectId }) => {
   const canvasWidth = video.resolution_w ?? 1280;
   const canvasHeight = video.resolution_h ?? 720;
 
-  /**
-   * Load frame JPEG image when currentFrame changes.
-   * Uses browser Image() to load from /api/.../frames/{n}.
-   */
   const loadFrameImage = useCallback(
     (frameNumber: number): void => {
-      // TODO: implement per contract
+      const url = getFrameUrl(projectId, video.id, frameNumber);
+      const img = new Image();
+      img.onload = () => setFrameImage(img);
+      img.src = url;
     },
     [video.id, projectId]
   );
 
-  /**
-   * Load all trajectory data once (large payload, cached in state).
-   * Triggered when video becomes PROCESSED.
-   */
   const loadTrajectories = useCallback(async (): Promise<void> => {
-    // TODO: implement per contract
+    try {
+      const data = await getTrajectories(projectId, video.id);
+      setTrajectoryData(data);
+    } catch (e) {
+      console.error("Failed to load trajectories", e);
+    }
   }, [video.id, projectId]);
 
-  /**
-   * Load heatmap data on first heatmap layer enable.
-   */
   const loadHeatmap = useCallback(async (): Promise<void> => {
-    // TODO: implement per contract
+    try {
+      const data = await getHeatmapData(video.id);
+      setHeatmapData(data);
+    } catch (e) {
+      console.error("Failed to load heatmap", e);
+    }
   }, [video.id]);
 
-  /**
-   * Fetch server segment data, run client-side DBSCAN, set suggestedLines.
-   * DBSCAN parameters: eps=50px (position), angle_eps=20°; minSamples=5.
-   */
   const handleSuggestLines = useCallback(async (): Promise<void> => {
-    // TODO: implement per contract
-  }, [video.id]);
+    try {
+      let segs = suggestData;
+      if (!segs) {
+        segs = await getSuggestData(video.id);
+        setSuggestData(segs);
+      }
+      const suggestions = suggestCountingLines(segs, canvasWidth, canvasHeight);
+      setSuggestedLines(suggestions);
+      setLayers((l) => ({ ...l, suggestedLines: true }));
+    } catch (e) {
+      console.error("Failed to load suggest data", e);
+    }
+  }, [video.id, suggestData, canvasWidth, canvasHeight]);
 
-  /**
-   * Handle Konva stage click in drawing mode.
-   * - First click: start line
-   * - Subsequent clicks: extend line
-   * - Double-click: finalize line → prompt name → save to backend
-   */
   const handleStageClick = useCallback(
     (e: any): void => {
-      // TODO: implement per contract
+      if (drawingMode !== "drawing") return;
+      const stage = e.target.getStage();
+      const pos = stage.getPointerPosition();
+      if (!pos) return;
+      const point: LinePoint = { x: pos.x, y: pos.y };
+      if (e.evt.detail === 2 && inProgressPoints.length >= 2) {
+        // Double click: finalize
+        saveLine();
+        return;
+      }
+      setInProgressPoints((prev) => [...prev, point]);
     },
     [drawingMode, inProgressPoints]
   );
 
-  /**
-   * Save the in-progress line to backend.
-   * Requires newLineName to be non-empty.
-   */
   const saveLine = useCallback(async (): Promise<void> => {
-    // TODO: implement per contract
+    if (inProgressPoints.length < 2 || !newLineName.trim()) return;
+    setLoading(true);
+    try {
+      await createCountingLine(video.id, {
+        name: newLineName.trim(),
+        points: inProgressPoints,
+        color: newLineColor,
+      });
+      setInProgressPoints([]);
+      setDrawingMode("idle");
+      setNewLineName("");
+      const lines = await listCountingLines(video.id);
+      setCountingLines(lines);
+    } catch (e) {
+      setError("Failed to save counting line");
+    } finally {
+      setLoading(false);
+    }
   }, [inProgressPoints, newLineName, newLineColor, video.id]);
 
-  /**
-   * Delete a counting line and its result.
-   */
   const handleDeleteLine = useCallback(
     async (lineId: string): Promise<void> => {
-      // TODO: implement per contract
+      try {
+        await deleteCountingLine(video.id, lineId);
+        setCountingLines((prev) => prev.filter((l) => l.id !== lineId));
+        setResults((prev) => { const r = { ...prev }; delete r[lineId]; return r; });
+      } catch (e) {
+        setError("Failed to delete line");
+      }
     },
     [video.id]
   );
 
-  /**
-   * Load counting result for a specific line.
-   * Results lazy-loaded per line on first select.
-   */
   const loadResult = useCallback(
     async (lineId: string): Promise<void> => {
-      // TODO: implement per contract
+      if (results[lineId]) return;
+      try {
+        const result = await getCountingResult(video.id, lineId);
+        setResults((prev) => ({ ...prev, [lineId]: result }));
+      } catch {
+        // result not yet computed
+      }
     },
-    [video.id]
+    [video.id, results]
   );
 
   useEffect(() => { loadFrameImage(currentFrame); }, [currentFrame, loadFrameImage]);
@@ -266,8 +297,100 @@ export const CountingLineEditor: React.FC<Props> = ({ video, projectId }) => {
 
       {/* Right: control panel */}
       <div className="w-80 p-4 bg-gray-900 text-white overflow-y-auto flex flex-col gap-4">
-        {/* TODO: implement control panel per contract */}
-        {/* Layer toggles, mode buttons, line list, name/color inputs, export button */}
+        {/* Layer toggles */}
+        <div>
+          <h3 className="font-semibold mb-2 text-sm text-gray-300">Layers</h3>
+          {(["trajectories", "heatmap", "countingLines", "suggestedLines"] as const).map((key) => (
+            <label key={key} className="flex items-center gap-2 text-sm mb-1 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={layers[key]}
+                onChange={(e) => setLayers((l) => ({ ...l, [key]: e.target.checked }))}
+              />
+              {key}
+            </label>
+          ))}
+        </div>
+
+        {/* Drawing mode */}
+        <div>
+          <h3 className="font-semibold mb-2 text-sm text-gray-300">Drawing</h3>
+          <button
+            className={"px-3 py-1 rounded text-sm mr-2 " + (drawingMode === "drawing" ? "bg-blue-600" : "bg-gray-700")}
+            onClick={() => setDrawingMode(drawingMode === "drawing" ? "idle" : "drawing")}
+          >
+            {drawingMode === "drawing" ? "Stop Drawing" : "Draw Line"}
+          </button>
+          {drawingMode === "drawing" && (
+            <div className="mt-2 flex flex-col gap-2">
+              <input
+                type="text"
+                placeholder="Line name"
+                value={newLineName}
+                onChange={(e) => setNewLineName(e.target.value)}
+                className="bg-gray-800 text-white px-2 py-1 rounded text-sm w-full"
+              />
+              <div className="flex items-center gap-2 text-sm">
+                <label>Color:</label>
+                <input type="color" value={newLineColor} onChange={(e) => setNewLineColor(e.target.value)} />
+              </div>
+              {inProgressPoints.length >= 2 && (
+                <button
+                  className="bg-green-600 hover:bg-green-700 px-3 py-1 rounded text-sm"
+                  onClick={saveLine}
+                  disabled={!newLineName.trim() || loading}
+                >
+                  {loading ? "Saving..." : "Save Line"}
+                </button>
+              )}
+            </div>
+          )}
+        </div>
+
+        {/* Suggest button */}
+        <button
+          className="bg-purple-600 hover:bg-purple-700 px-3 py-1 rounded text-sm"
+          onClick={handleSuggestLines}
+        >
+          Suggest Lines
+        </button>
+
+        {/* Counting lines list */}
+        <div>
+          <h3 className="font-semibold mb-2 text-sm text-gray-300">Counting Lines</h3>
+          {countingLines.map((line) => (
+            <div
+              key={line.id}
+              className={"p-2 rounded mb-1 cursor-pointer " + (selectedLineId === line.id ? "bg-gray-700" : "hover:bg-gray-800")}
+              onClick={() => { setSelectedLineId(line.id); loadResult(line.id); }}
+            >
+              <div className="flex items-center gap-2">
+                <span className="w-3 h-3 rounded-full inline-block" style={{ backgroundColor: line.color }} />
+                <span className="text-sm flex-1">{line.name}</span>
+                <button
+                  className="text-red-400 text-xs hover:text-red-300"
+                  onClick={(e) => { e.stopPropagation(); handleDeleteLine(line.id); }}
+                >Del</button>
+              </div>
+              {results[line.id] && (
+                <div className="text-xs text-gray-400 mt-1">
+                  In: {results[line.id].count_in} | Out: {results[line.id].count_out}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+
+        {/* Export */}
+        <a
+          href={getExportUrl(video.id)}
+          download
+          className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded text-sm text-center"
+        >
+          Export XLSX
+        </a>
+
+        {error && <div className="text-red-400 text-sm">{error}</div>}
       </div>
     </div>
   );

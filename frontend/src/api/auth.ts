@@ -4,26 +4,27 @@ import type { User } from "../types";
 
 /**
  * Redirect browser to backend OAuth2 login URL.
- * provider defaults to VITE_OAUTH_PROVIDER env.
  */
 export function redirectToLogin(provider?: string): void {
-  // TODO: implement per contract
+  const p = provider ?? import.meta.env.VITE_OAUTH_PROVIDER ?? "github";
+  window.location.href = `/api/v1/auth/login?provider=${encodeURIComponent(p)}`;
 }
 
 /**
  * Exchange OAuth2 code for JWT, store token in localStorage.
- * Called from OAuthCallback page.
- *
- * @param code     authorization code from query string
- * @param state    state param for CSRF validation
- * @param provider oauth provider name
  */
 export async function handleOAuthCallback(
   code: string,
   state: string,
   provider?: string
 ): Promise<void> {
-  // TODO: implement per contract
+  const p = provider ?? import.meta.env.VITE_OAUTH_PROVIDER ?? "github";
+  const res = await apiClient.post<{ access_token: string }>("/v1/auth/callback", {
+    code,
+    state,
+    provider: p,
+  });
+  localStorage.setItem("access_token", res.data.access_token);
 }
 
 /**
@@ -31,8 +32,12 @@ export async function handleOAuthCallback(
  * Returns null if not authenticated.
  */
 export async function getCurrentUser(): Promise<User | null> {
-  // TODO: implement per contract
-  return null;
+  try {
+    const res = await apiClient.get<User>("/v1/auth/me");
+    return res.data;
+  } catch {
+    return null;
+  }
 }
 
 export function logout(): void {

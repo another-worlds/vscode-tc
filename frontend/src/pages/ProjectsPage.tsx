@@ -1,26 +1,25 @@
-// Grand Contract v1.0 — M3/M9 Projects page with video dashboard
-import React from "react";
+// Grand Contract v1.0 - M3/M9 Projects page
+import React, { useRef } from "react";
 import { useParams, useNavigate } from "react-router-dom";
-import { useQuery } from "@tanstack/react-query";
+import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { getProjectDashboard, listProjects } from "../api/workspaces";
-import { uploadVideo, queueVideo } from "../api/videos";
+import { uploadVideo } from "../api/videos";
 import type { VideoSummary } from "../types";
 
-/**
- * Section 2: Project control.
- *
- * Shows:
- *   - List of projects in workspace
- *   - Selected project: video inventory table
- *     Columns: filename, resolution, size, duration, status, counting lines, export
- *   - Upload button (drag-drop or file picker)
- *   - Re-queue button for ERROR videos
- *   - Link to counting editor per video (status=PROCESSED only)
- */
+const STATUS_BADGE: Record<string, string> = {
+  PENDING: "bg-gray-600",
+  QUEUED: "bg-yellow-600",
+  PROCESSING: "bg-blue-600",
+  PROCESSED: "bg-green-600",
+  ERROR: "bg-red-600",
+};
+
 export const ProjectsPage: React.FC = () => {
   const { workspaceId } = useParams<{ workspaceId: string }>();
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
   const [selectedProjectId, setSelectedProjectId] = React.useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const { data: projects } = useQuery({
     queryKey: ["projects", workspaceId],
@@ -34,44 +33,71 @@ export const ProjectsPage: React.FC = () => {
     enabled: !!selectedProjectId,
   });
 
-  const handleUpload = async (projectId: string, file: File) => {
-    // TODO: implement per contract — show progress bar
+  const handleUpload = async (file: File) => {
+    if (!selectedProjectId) return;
+    const fd = new FormData();
+    fd.append("file", file);
+    fd.append("project_id", selectedProjectId);
+    try {
+      await uploadVideo(fd);
+      queryClient.invalidateQueries({ queryKey: ["project-dashboard", workspaceId, selectedProjectId] });
+    } catch (e) {
+      console.error("Upload failed", e);
+    }
   };
 
-  // TODO: implement per contract — full render
   return (
     <div className="flex h-full">
-      {/* Project list sidebar */}
-      <div className="w-64 bg-gray-900 p-4 border-r border-gray-800">
-        <h2 className="text-white font-semibold mb-4">Projects</h2>
+      <div className="w-64 bg-gray-900 p-4 border-r border-gray-800 flex flex-col gap-2">
+        <h2 className="text-white font-semibold mb-2">Projects</h2>
         {projects?.map((p) => (
           <div
             key={p.id}
-            className={`p-3 rounded cursor-pointer mb-1 ${selectedProjectId === p.id ? "bg-blue-700" : "hover:bg-gray-800"} text-white`}
+            className={"p-3 rounded cursor-pointer " + (selectedProjectId === p.id ? "bg-blue-700" : "hover:bg-gray-800") + " text-white"}
             onClick={() => setSelectedProjectId(p.id)}
           >
             {p.name}
+            {p.location_label && <div className="text-xs text-gray-400">{p.location_label}</div>}
           </div>
         ))}
       </div>
 
-      {/* Video table */}
       <div className="flex-1 p-6 overflow-auto">
-        {/* TODO: implement video inventory table per contract */}
-        {dashboard?.videos.map((v) => (
-          <div key={v.id} className="bg-gray-900 rounded p-4 mb-2 flex items-center gap-4">
-            <span className="text-white flex-1">{v.filename}</span>
-            <span className="text-gray-400 text-sm">{v.status}</span>
-            {v.status === "PROCESSED" && (
+        {selectedProjectId ? (
+          <>
+            <div className="flex justify-between items-center mb-4">
+              <h2 className="text-white text-xl font-semibold">Videos</h2>
               <button
-                className="bg-blue-600 text-white px-3 py-1 rounded text-sm"
-                onClick={() => navigate(`/workspaces/${workspaceId}/projects/${selectedProjectId}/videos/${v.id}/count`)}
-              >
-                Open Counting
-              </button>
-            )}
-          </div>
-        ))}
+                className="bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded text-sm"
+                onClick={() => fileInputRef.current?.click()}
+              >Upload Video</button>
+              <input
+                ref={fileInputRef} type="file" accept=".mp4" className="hidden"
+                onChange={(e) => { const file = e.target.files?.[0]; if (file) handleUpload(file); }}
+              />
+            </div>
+            {dashboard?.videos.map((v: VideoSummary) => (
+              <div key={v.id} className="bg-gray-900 rounded-lg p-4 mb-2 flex items-center gap-4 border border-gray-700">
+                <div className="flex-1">
+                  <div className="text-white font-medium">{v.filename}</div>
+                  <div className="text-gray-400 text-sm">
+                    {v.resolution ?? "unknown"}{v.duration_min != null ? " - " + v.duration_min.toFixed(1) + " min" : ""}{v.size_bytes != null ? " - " + (v.size_bytes / 1e6).toFixed(1) + " MB" : ""}
+                  </div>
+                </div>
+                <span className={"text-xs text-white px-2 py-1 rounded " + (STATUS_BADGE[v.status] ?? "bg-gray-600")}>{v.status}</span>
+                {v.has_counting_lines && <span className="text-xs text-green-400">Lines</span>}
+                {v.status === "PROCESSED" && (
+                  <button
+                    className="bg-indigo-600 hover:bg-indigo-700 text-white px-3 py-1 rounded text-sm"
+                    onClick={() => navigate("/workspaces/" + workspaceId + "/projects/" + selectedProjectId + "/videos/" + v.id + "/count")}
+                  >Count</button>
+                )}
+              </div>
+            ))}
+          </>
+        ) : (
+          <div className="text-gray-400 pt-12 text-center">Select a project</div>
+        )}
       </div>
     </div>
   );

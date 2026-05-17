@@ -17,8 +17,12 @@ async def export_xlsx(
 ) -> StreamingResponse:
     """
     Stream Excel export of counting results.
-    Content-Disposition: attachment; filename="{video_filename}_results.xlsx"
-    Fires RESULTS_DOWNLOADED audit.
+    Content-Disposition: attachment; filename="{video_id}_results.xlsx"
     """
-    # TODO: implement per contract
-    pass
+    buffer = await export_service.export_counting_results_xlsx(video_id, db)
+    headers = {"Content-Disposition": f"attachment; filename={video_id}_results.xlsx"}
+    return StreamingResponse(
+        buffer,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers=headers,
+    )

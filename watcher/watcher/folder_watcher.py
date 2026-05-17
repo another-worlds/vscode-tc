@@ -40,18 +40,18 @@ class VideoFileHandler(FileSystemEventHandler):
                                   (default: use DEFAULT_PROJECT_ID env if set,
                                    else first project in workspace)
         """
-        # TODO: implement per contract
-        pass
+        self.backend_url = backend_url.rstrip("/")
+        self.project_id_resolver = project_id_resolver
 
     def on_closed(self, event: FileClosedEvent) -> None:
         """Handle file-closed-for-write (inotify IN_CLOSE_WRITE)."""
-        # TODO: implement per contract
-        pass
+        if not event.is_directory and event.src_path.lower().endswith(".mp4"):
+            self._handle_new_file(event.src_path)
 
     def on_moved(self, event: FileMovedEvent) -> None:
         """Handle file moved into watch directory (e.g. ydisk sync renames temp→final)."""
-        # TODO: implement per contract
-        pass
+        if event.dest_path.lower().endswith(".mp4"):
+            self._handle_new_file(event.dest_path)
 
     def _handle_new_file(self, filepath: str) -> None:
         """
@@ -63,8 +63,39 @@ class VideoFileHandler(FileSystemEventHandler):
 
         Error modes: logs HTTP errors, does not retry (watcher is best-effort)
         """
-        # TODO: implement per contract
-        pass
+        path = Path(filepath)
+        if path.suffix.lower() != ".mp4":
+            logger.debug("Ignoring non-mp4 file: %s", filepath)
+            return
+
+        project_id = self.project_id_resolver.resolve(filepath)
+        if project_id is None:
+            logger.warning("No project_id resolved for watcher file: %s", filepath)
+            return
+
+        payload = {
+            "filepath": filepath,
+            "project_id": project_id,
+            "source": "watcher",
+        }
+
+        async def post_register() -> None:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                resp = await client.post(f"{self.backend_url}/internal/videos/register", json=payload)
+                if resp.status_code != 200:
+                    logger.warning(
+                        "Watcher failed to register %s: %s %s",
+                        filepath,
+                        resp.status_code,
+                        resp.text,
+                    )
+                else:
+                    logger.info("Watcher registered new video: %s", filepath)
+
+        try:
+            asyncio.run(post_register())
+        except Exception as exc:
+            logger.warning("Watcher registration error for %s: %s", filepath, exc)
 
 
 class ProjectIdResolver:
@@ -87,5 +118,14 @@ class ProjectIdResolver:
         Returns:
             project_id UUID string or None (caller should skip if None)
         """
-        # TODO: implement per contract
-        pass
+        default_project_id = settings.DEFAULT_PROJECT_ID.strip()
+        if default_project_id:
+            return default_project_id
+
+        path = Path(filepath)
+        parts = [part for part in path.parts if part and part != "/"]
+        if len(parts) >= 2:
+            # If the file is under a subdirectory, use the immediate parent folder as slug.
+            return None
+
+        return None
